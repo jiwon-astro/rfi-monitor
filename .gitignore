@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+figures/
+archive/
+tmp/
+docs/
+data/
+clock_anchor.json
+current_session.json
+status.json
+.control.lock

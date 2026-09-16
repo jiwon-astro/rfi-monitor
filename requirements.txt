@@ -1,0 +1,7 @@
+numpy
+matplotlib
+jupyterlab
+nbformat
+nbclient
+ipykernel
+# Optional PDF tools: reportlab, pypdf, pdfplumber, Pillow (plus Poppler)

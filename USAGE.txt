@@ -1,0 +1,334 @@
+##############################################################################
+#                     OWON RFI RECORDER - LINUX GUIDE                         #
+#                     HSA1036-TG / Raspberry Pi                               #
+#                     Updated: 2026-09-16                                     #
+##############################################################################
+
+  위치 : /home/jjiwon/owon-rfi
+  읽기 : less ~/owon-rfi/USAGE.txt
+  이동 : Space=다음 화면  b=이전 화면  /단어=검색  n=다음 검색  q=종료
+
+  ASCII 구분선 + UTF-8 한국어 문서. Markdown 렌더러 없이 읽습니다.
+  이 문서는 현재 recorder의 기능이며 SA 전체 기능 목록은 아닙니다.
+
+  CONTENTS
+    01  QUICK START       설정 복사 / 문법 검사 / 계획 확인
+    02  PREAMP            내부 preamp ON / OFF
+    03  FREQUENCY PLAN    자동 분할 / 정확한 1 MHz 간격
+    04  CONFIG OPTIONS   변경 가능한 설정
+    05  RUN / STOP       기록 시작 / 상태 확인 / 정상 종료
+    06  FIXED OPTIONS    코드에서 고정되거나 지원하지 않는 기능
+    07  LIMITS           소프트웨어 제한 / 주의 사항
+    08  FILES / TIME     저장 파일 / 시간 해석
+    09  BASELINE         50 ohm 종단 / 별도 평균 스펙트럼
+
+##############################################################################
+# 01. QUICK START
+##############################################################################
+
+  아래 명령은 Pi 터미널에서 실행합니다.
+  config_test.json 대신 사용할 기존 설정 파일을 선택해도 됩니다.
+  cp -i가 덮어쓰기를 물으면 기존 파일이 필요한지 먼저 확인하세요.
+
+    cd ~/owon-rfi
+    cp -i config_test.json config_preamp.json
+    nano config_preamp.json
+    python3 -m json.tool config_preamp.json > /dev/null
+    python3 rfi.py record --config config_preamp.json \
+      --seconds 600 --summary-only
+
+  summary-only는 계획만 출력합니다. Clock/SA 접속, 설정 변경,
+  기록 시작은 하지 않습니다. Internal preamp와 Sweep 항목을 확인하세요.
+
+  주의: 여러 줄 명령은 줄 끝의 \ 기호까지 포함하여 복사합니다.
+        JSON에는 # 또는 // 주석과 마지막 항목 뒤 쉼표를 넣지 마세요.
+        실행 중 config 편집은 적용되지 않습니다. 종료 후 새로 실행합니다.
+
+##############################################################################
+# 02. PREAMP
+##############################################################################
+
+  기존 JSON의 preamp 값을 수정하거나, 없으면 항목을 추가합니다.
+
+    "preamp": 1                 ON
+    "preamp": 0                 OFF (항목 생략 시에도 OFF)
+
+  위 ON/OFF 설명은 JSON에 복사하지 마세요. 숫자 0/1만 허용합니다.
+  문자열 "ON", true, null, 소수는 허용하지 않습니다.
+
+  - SA 내부 preamp만 제어합니다. 외부 UBBV 등의 증폭기는 제어하지 않습니다.
+  - gain을 몇 dB로 설정하는 옵션은 없습니다.
+  - 구간 설정 중 잠시 OFF, ref/attenuation/범위 적용 후 요청 상태로 바꿉니다.
+  - 매 sweep에서 실제 상태를 검증하고 metadata에 보존합니다.
+  - ON/OFF 자료는 별도 run으로 기록하세요. 같은 조건으로 합치지 마세요.
+  - 약신호 감도와 강한 입력에 대한 과부하 여유는 실측 확인이 필요합니다.
+    외부 증폭기가 있다면 내부 preamp ON이 항상 유리한 것은 아닙니다.
+
+##############################################################################
+# 03. FREQUENCY PLAN
+##############################################################################
+
+  다음은 기존 JSON에 넣을 일부 항목입니다. 완전한 config는 아닙니다.
+
+    "start_hz": 10000000,
+    "stop_hz": 1000000000,
+    "bin_size_hz": 1000000,
+    "protection_region_hz": [50000000, 400000000]
+
+  A. npoints 생략 또는 null : 요청 bin 간격 이하로 자동 분할
+
+     Sweep 1    10 -  505 MHz    801 points    0.61875 MHz/bin
+     Sweep 2   505 - 1000 MHz    801 points    0.61875 MHz/bin
+     OUTPUT    10 - 1000 MHz   1601 points    중복 경계점 하나 제거
+
+  B. "npoints": 991 추가 : 정확히 1 MHz 간격으로 출력
+
+     Sweep 1    10 -  810 MHz    801 points    1 MHz/bin
+     Sweep 2   200 - 1000 MHz    801 points    1 MHz/bin
+     OUTPUT    10 - 1000 MHz    991 points    겹치는 측정값 제거
+
+  - npoints는 최종 출력 점수입니다. SA에 보내는 점수는 항상 native 801점.
+  - 전체 start/stop을 유지합니다. 중복을 자를 뿐 보간하지 않습니다.
+  - 50-400 MHz는 하나의 sweep에서 취득합니다.
+  - 보호 구간을 유지하려면 bin >=437500 Hz여야 합니다.
+    RBW 100 kHz는 이와 별개이며 사용할 수 있습니다.
+  - bin_size_hz가 없는 구형 config는 801점 단일 sweep만 허용합니다.
+    npoints=991을 쓰려면 bin_size_hz도 추가해야 합니다.
+
+##############################################################################
+# 04. CONFIG OPTIONS
+##############################################################################
+
+  start_hz / stop_hz
+      전체 주파수 범위, 단위 Hz. 예: 10000000 / 1000000000.
+
+  bin_size_hz
+      최대 허용 주파수 좌표 간격, 단위 Hz. 예: 1000000. RBW와 별개.
+
+  npoints
+      생략/null: 자동 분할. 정수 지정: 정확한 최종 출력 점수.
+      (stop-start)/(npoints-1)이 bin_size_hz를 초과하면 거절합니다.
+
+  protection_region_hz
+      기본 [50000000,400000000]. 요청 범위와 겹치는 부분을 한 sweep에 유지.
+      null로 해제할 수 있습니다.
+
+  rbw_hz / vbw_hz
+      필터 대역폭, 단위 Hz. 예: 100000 / 100000. 둘 다 manual.
+
+  reference_dbm / attenuation_db
+      Reference level과 내부 입력 감쇠량. 예: -20 dBm / 0 dB.
+      감쇠값을 자동으로 선택하는 기능은 OFF입니다.
+
+  preamp
+      0=OFF, 1=ON. 생략 시 OFF. 내부 preamp만 제어합니다.
+
+  window_seconds
+      분석 시간창의 선호값. 실제 dwell/적분 시간이나 저장 주기가 아닙니다.
+
+  output_dir
+      기록 경로. 상대 경로 data는 rfi.py가 있는 디렉토리 기준입니다.
+
+  site / polarization / rf_chain / notes
+      메타데이터. 안테나/증폭기/편파를 실제 제어하거나 교정하지 않습니다.
+
+  host / port / expected_serial
+      예: 192.168.40.230 / 1015 / 24500092. 연결 장비를 확인합니다.
+
+  min_free_mb
+      기록에 필요한 최소 빈 디스크 MiB. 기본 예제는 512입니다.
+
+  sweep_wait_factor / sweep_wait_margin_seconds
+      보고 sweep time의 배수 + 추가 대기 초. 최소 2 / 0.3.
+
+  stable_check_seconds
+      연속 binary trace가 같은지 확인하는 간격. 최소 0.05초.
+
+##############################################################################
+# 05. RUN / STOP
+##############################################################################
+
+  [준비] RF 연결, 독립 전원, clock anchor를 확인합니다.
+  Pi 재부팅 후에는 clock 동기화가 다시 필요합니다.
+  아래 한 줄만 Windows PowerShell에서 실행합니다.
+
+    & 'D:\Programing\LAMBDA\RFI\tools\sync-clock.ps1'
+
+  [시작] 아래는 Pi 터미널에서 실행합니다. 총 600초 기록 예제입니다.
+
+    cd ~/owon-rfi
+    nohup python3 -u rfi.py record --config config_preamp.json \
+      --seconds 600 >> record.log 2>&1 < /dev/null &
+    echo "Started PID: $!"
+
+  [확인]
+
+    python3 rfi.py status
+    tail -n 40 record.log
+
+  [종료] 12345를 status에서 확인한 실제 recorder PID로 바꾸세요.
+         ps 출력이 해당 recorder인지 확인한 후에만 kill을 실행합니다.
+
+    ps -p 12345 -o pid,etime,args
+    kill -TERM 12345
+    python3 rfi.py status
+
+  --seconds 600   : 10분
+  --hours 24      : 24시간
+  둘 다 생략      : 24시간
+  둘 다 지정      : seconds 우선. 혼동 방지를 위해 하나만 쓰세요.
+
+  - 현재 cycle 종료까지 정지가 지연될 수 있습니다. stopped 확인 후 종료.
+  - SSH를 끊어도 nohup은 유지됩니다. USB가 유일한 전원이면 빼지 마세요.
+  - 최초부터 --resume을 사용한 미완료 세션은 같은 config와 원래
+    종료시각으로 재개할 수 있습니다. 정상 종료/설정 변경 시에는 새 run.
+
+  OTHER COMMANDS
+    python3 rfi.py --help
+    python3 rfi.py status
+    python3 rfi.py probe --config config_preamp.json
+    python3 rfi.py configure --config config_preamp.json
+
+  probe는 SA 상태/trace를 읽습니다. configure는 SA 설정을 변경하고
+  첫 구간 single sweep을 시작할 수 있지만 CSV는 저장하지 않습니다.
+  기록 중에는 probe/configure를 실행하지 마세요.
+
+##############################################################################
+# 06. FIXED OPTIONS / UNSUPPORTED FEATURES
+##############################################################################
+
+  DETECTOR / TRACE     Positive Peak / WRITE / TRACE1 고정.
+                      RMS, sample, 다른 trace 선택은 미지원.
+
+  SWEEP               single sweep, sweep time AUTO 고정.
+                      수동 sweep time / continuous 기록은 미지원.
+
+  AUTO SETTINGS       RBW / VBW / attenuation AUTO 모두 OFF.
+                      각 수치는 config에서 변경 가능.
+
+  EMI / TG            OFF 고정. EMI / Quasi-Peak / TG 제어는 미지원.
+
+  UNIT / AXIS         dBm / linear / X,Y offset=0 고정.
+
+  NATIVE POINTS       801점 확인 필수. SWE:POIN setter를 보내지 않음.
+
+  INSTRUMENT          HSA1036-TG / V3.0.2.0만 허용. serial 일치 필수.
+
+  MAX HOLD / AVERAGE  record: raw 저장. baseline: 선형 전력 평균 저장.
+                      소프트웨어 교정은 적용하지 않음.
+
+  TRIGGER SOURCE      config 선택 기능 없음. 현재 코드에서 설정/검증 안 함.
+
+  위 항목을 임의 JSON 키로 추가해도 제어되지 않습니다.
+  SA 전면 조작은 다음 구간에서 덮어써지거나 검증 오류를 낼 수 있습니다.
+  이번에 선택 가능하게 변경한 항목은 preamp입니다.
+
+##############################################################################
+# 07. SOFTWARE LIMITS / CAUTIONS
+##############################################################################
+
+  Frequency           9 kHz - 3.6 GHz
+  Bandwidth           1 <= VBW <= RBW <= 1000000 Hz
+  Attenuation         0 - 50 dB
+  Reference           -80 .. 30 dBm
+  window_seconds      1 - 3600
+  Exact npoints       >=801
+  Plan limit          최대 128 sweeps/cycle
+  Clock anchor        같은 boot / 7일 이내 / uncertainty <=5초
+
+  이는 소프트웨어 허용 범위이지 장비의 모든 지원값을 뜻하지 않습니다.
+  범위 안의 임의 숫자를 장비가 지원한다고 보장하지 않습니다.
+  요청값과 실제 readback이 다르면 중단합니다.
+
+  동시에 하나의 recorder만 제어 잠금을 획득합니다.
+  손상된 CSV tail, 설정/축이 다른 resume, 빈 공간 부족은 우회하지 않습니다.
+  Preamp readback 성공은 RF 교정이나 overload 검증을 대신하지 않습니다.
+
+##############################################################################
+# 08. FILES / TIME
+##############################################################################
+
+  data/YYYYMMDDTHHMMSSZ/
+      raw_sweeps.csv        한 run의 스펙트럼 파일 하나
+      metadata_sweeps.json  설정과 주파수축/구간 계획
+      metadata_*.json      추가 연결 시점의 metadata
+      session.json         세션 상태와 종료시각
+      events.log           구간별 UTC 시각 (SEGMENTS) 및 이벤트
+
+  한 CSV 행 = 여러 구간을 순서대로 취득한 cycle. 동시 측정이 아닙니다.
+  실제 주파수 좌표는 CSV header에 저장됩니다.
+  notebook 시간창은 cycle 첫 요청 시각 기준이며 10초 연속 적분과 다릅니다.
+  UTC는 Pi OS/RTC와 별도의 clock anchor에서 얻습니다.
+  구간 실패 시 불완전한 CSV 행은 저장하지 않습니다.
+  종료 후 SA는 마지막 구간과 preamp 상태에 남을 수 있습니다.
+
+  REFERENCE
+    OWON HSA Programming Manual (Jun 2024), p.61
+    :POW:GAIN:AUTO {0|1} = 내부 preamp OFF/ON
+    명령의 GAIN:AUTO는 attenuation AUTO를 뜻하지 않습니다.
+
+##############################################################################
+# 09. BASELINE / 50 OHM TERMINATION
+##############################################################################
+
+  SA 입력에 50 ohm 종단기를 직접 연결한 뒤 별도로 실행합니다.
+  baseline 명령은 연결 상태를 자동 판별하지 못합니다.
+  record 시작 시 자동 실행되지 않으며 subtraction은 하지 않습니다.
+
+    cd ~/owon-rfi
+    python3 rfi.py baseline --config config_test.json --summary-only
+    python3 -u rfi.py baseline --config config_test.json --seconds 60
+
+  --seconds 생략 시 baseline 기본값은 60초입니다.
+  record 기본값은 기존처럼 24시간입니다. --hours도 사용 가능합니다.
+  window_seconds는 baseline 평균 시간에 영향을 주지 않습니다.
+  baseline에는 --resume을 사용할 수 없습니다.
+
+  초기 설정 검증 후 60초 동안 완전한 scan cycle을 반복 취득합니다.
+  마지막 cycle을 끝내므로 실제 시간이 60초보다 길 수 있습니다.
+  여러 구간은 순차 측정이며 설정/읽기 사이에 dead time이 있습니다.
+  따라서 각 주파수를 60초 연속 적분하는 방식은 아닙니다.
+
+    mean_power_dbm = 10 * log10(mean(10 ** (sample_dbm / 10)))
+
+  dBm 숫자 자체를 평균하지 않고 mW로 바꾼 후 동등 가중 평균합니다.
+  Positive Peak 검출기를 유지합니다. RMS 평균이나 NF 교정이 아닙니다.
+  추후 비교할 관측과 RBW/VBW, attenuation, preamp 등을 맞추세요.
+  config의 rf_chain/notes는 원본 설정 문맥으로만 보존됩니다.
+  실제 baseline reference plane은 SA 입력의 50 ohm 종단입니다.
+
+  정상 완료한 별도 run 폴더:
+
+    data/YYYYMMDDTHHMMSSZ/baseline.csv
+                         metadata_baseline.json
+                         session.json
+                         events.log
+
+  baseline.csv = frequency_hz, mean_power_dbm 두 열, 주파수당 한 행.
+  평균 스펙트럼 하나만 저장하며 raw CSV/NPZ는 만들지 않습니다.
+  metadata에는 실제 설정/축/평균 횟수/취득 UTC 구간을 저장합니다.
+  Ctrl-C / SIGTERM / 통신 오류 시 완료 CSV를 발행하지 않습니다.
+  실패 run은 session.json의 complete=false로 남습니다.
+
+  상태 확인 (record의 status.json과 분리):
+
+    cat ~/owon-rfi/baseline_status.json
+
+  SSH를 끊고 진행하려면 아래 두 줄을 한 명령으로 입력합니다.
+  첫 줄 끝의 역슬래시도 포함합니다. Pi 전원은 계속 공급해야 합니다.
+
+    nohup python3 -u rfi.py baseline --config config_test.json \
+      --seconds 60 >> baseline.log 2>&1 < /dev/null &
+    echo "Started PID: $!"
+
+  Windows PowerShell에서 완료 파일 다운로드 (기존 fetch 도구):
+
+    & 'D:\Programing\LAMBDA\RFI\tools\fetch-data.ps1'
+
+  -Run YYYYMMDDTHHMMSSZ를 추가하면 그 run만 받습니다.
+  baseline.csv도 다운로드 대상이며 기존 파일은 덮어쓰지 않습니다.
+  일반 관측용 raw_sweeps.csv와 형식이 다릅니다.
+
+##############################################################################
+# END OF DOCUMENT
+##############################################################################
